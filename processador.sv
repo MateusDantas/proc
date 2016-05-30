@@ -58,31 +58,39 @@ module processador (
    // J: op not_used addr
 
    logic [31:0] Instr;
-   logic [5:0] 	op;
+   logic [6:0] 	op;
    logic [4:0] 	rs;
    logic [4:0] 	rt;
    logic [N-1:0] imm;
    logic [4:0] 	 rd;
    logic [4:0] 	 shamt;
-   logic [5:0] 	 funct;
+   logic [2:0] 	 funct;
+   logic [6:0] 	 funct2;
+   logic [N-1:0] imm2;
    logic [N-1:0] addr;
    
    always_comb begin
-	  // Both
-	  op <= Instr[31:26];	  
-	  rs <= Instr[25:21];
-	  rt <= Instr[20:16];
+	  // All
+	  op <= Instr[6:0];
+	  // R/S/SB
+	  rs <= Instr[19:15]; //may swap
+	  rt <= Instr[24:20];
 
 	  // I
-	  imm <= Instr[N-1:0];
+	  imm <= Instr[(N + 20) - 1:20];
 
-	  // R
-	  rd <= Instr[15:11];
-	  shamt <= Instr[10:6];
-	  funct <= Instr[5:0];
+	  // U/UJ
+	  imm2 <= Instr[(N + 12) - 1:12];
+	  
+	  // R/I/S/SB
+	  rd <= Instr[11:7];
+	  funct <= Instr[14:12];
 
+	  // R/S/SB
+	  funct2 <= Instr[31:25];
+	  
 	  // J
-	  addr <= Instr[N-1:0] + ADDRFIX;
+	  addr <= Instr[(N + 12) - 1:12] + ADDRFIX;
 
    end // always_comb
 
@@ -205,7 +213,7 @@ module processador (
 		   endcase // unique case (ResultSrc)
 		end // case: 0
 		1: begin
-		   WriteReg <= (NREG-1);
+		   WriteReg <= rd;
 		   Result <= PCPlus;
 		end
 	  endcase // unique case (Link)
@@ -302,19 +310,19 @@ module processador (
 
    // Opcode main decoder
    always_comb begin
-	  MemRead <= op[5:3] == 3'b100; // lw
+	  MemRead <= op[6:0] == 7'b0000011; // lw
 
 	  unique case (op)
-		6'b010000: unique case(rs)
+/*/		6'b010000: unique case(rs)
 							4: c0WE <= 1; // mtc0
 							default: c0WE <= 0;
-						  endcase // case (rs)
+						  endcase // case (rs)*/
 		default: c0WE <= 0;
 	  endcase // unique case (op)
 
 	  // ResultSRC
 	  unique case (op)
-		6'b000000: unique case (funct)
+/*		6'b000000: unique case (funct)
 							6'b010000: ResultSrc <= 1; // mfhi
 							6'b010010: ResultSrc <= 1; // mfla
 							default: ResultSrc <= 0;
@@ -322,14 +330,14 @@ module processador (
 		6'b010000: unique case (rs)
 							0: ResultSrc <= 2; // mfc0
 							default: ResultSrc <= 0;
-						  endcase // case (rs)
+						  endcase // case (rs)*/
 		default: ResultSrc <= 0;		
 	  endcase // unique case (op)
 
 	  // HIWE, LOWE, HILOSrc
 	  unique case (op)
-		6'b000000: unique case(funct)
-							6'b010001: begin
+		7'0110011: unique case(funct)
+				/*/			6'b010001: begin
 							   HIWE <= 1;
 							   LOWE <= 0;
 							   HILOSrc <= 0;
@@ -338,11 +346,11 @@ module processador (
 							   HIWE <= 0;
 							   LOWE <= 1;
 							   HILOSrc <= 0;
-							end
+							end*/
 							default: begin
-							   HIWE <= (funct >= 24 && funct <= 27);
+							   HIWE <= (funct >= 0 && funct <= 5 && funct2 == 7'b0000001); //mult,multu,div,divu
 							   LOWE <= HIWE;
-							   HILOSrc <= HIWE | (funct == 18);
+							   HILOSrc <= HIWE; //removing mflo
 							end
 						  endcase // case (funct)
 		default: begin
@@ -354,7 +362,7 @@ module processador (
 
 	  // RegDst, ALUSrc, MemtoReg
 	  unique case (op)
-		6'b000000: begin // R
+		7'b0110011: begin // R
 		   RegDst <= 1;
 		   ALUSrc <= 0;
 		   MemtoReg <= 0;
@@ -362,112 +370,129 @@ module processador (
 		default: begin // I
 		   RegDst <= 0;
 		   ALUSrc <= ~Branch;
-		   MemtoReg <= (op[5:3] == 3'b100);
+		   MemtoReg <= (op[6:0] == 7'b0000011); //all 0 except for lw
 		end
 	  endcase // unique case (op)
 
 	  unique case (op)
-		6'b000000: unique case (funct)
-							6'b000000: ALUSrcA <= 1;
-							6'b000010: ALUSrcA <= 1;
-							6'b000011: ALUSrcA <= 1;
-							default: ALUSrcA <= 0;
-						  endcase // case (funct)
+		7'b0110011: unique case (funct)
+							 3'b001: unique case (funct2)
+											  7'b0000000: ALUSrcA <= 1; //sll
+											  default: ALUSrcA <= 0;
+											endcase
+							 3'b101: unique case (funct2)
+											  7'b0000001: ALUSrcA <= 0; //divu
+											  default: ALUSrcA <= 1; //srl/sra
+											endcase
+							 default: ALUSrcA <= 0;
+						   endcase // case (funct)
 		default: ALUSrcA <= 0;
 	  endcase // unique case (op)
-
+	  
 	  // MemWrite, RegWrite
-	  unique case(op[5:3])
-		3'b101: begin
+	  unique case(op[6:0])
+		7'b0100011: begin
 		   MemWrite <= 1;
 		   RegWrite <= 0;
 		end
 		default: begin
 		   MemWrite <= 0;
 		   unique case (op)
-			 6'b000000: unique  case(funct)
-								  6'b010001: RegWrite <= 0; //mthi
-								  6'b010011: RegWrite <= 0; //mtlo
-								  6'b011000: RegWrite <= 0; //mult
-								  6'b011001: RegWrite <= 0; //multu
-								  6'b011010: RegWrite <= 0; //div
-								  6'b011011: RegWrite <= 0; //divu
+			 7'b0110011: unique  case(funct2)
+					//			  6'b010001: RegWrite <= 0; //mthi
+								   //			  6'b010011: RegWrite <= 0; //mtlo
+								   7'b0000001: RegWrite <= 0; //mult,multu,div,divu							
+//								   3'b000: RegWrite <= 0; //mult
+//								   3'b001: RegWrite <= 0; //multu
+//								   3'b011010: RegWrite <= 0; //div
+//								   3'b011011: RegWrite <= 0; //divu
 								  default: RegWrite <= ~Branch | Link;
 								endcase // case (funct)
-			 6'b010000: RegWrite <= (rs == 0); // mtc0
+//			 6'b010000: RegWrite <= (rs == 0); // mtc0
 			 default: RegWrite <= ~Branch | Link;
 		   endcase // unique case (op)
 		end // case: default
 	  endcase // unique case (op[5:3])
 
 	  // PCBranch
-	  unique case(op[2:0])
-		3'b000: PCBranch <= RD1; // jr, jalr
-		3'b010: PCBranch <= addr; // j: {PC[31: 28], addr, 2'b00}
-		3'b011: PCBranc <= addr; // jal
+	  unique case(op)
+		7'b1100111: PCBranch <= (RD1 + imm) & ~1; // jr, jalr
+		7'b1101111: PCBranch <= addr; // jal
 		default: PCBranch <= PC+imm;
 	  endcase // unique case (op[2:0])
 
 	  // Branch
 	  unique case(op)
-		6'b000000: Branch <= (funct[5:1] == 5'b00100); //jr, jalr
-		default: Branch <= (op[5:3] == 3'b000); // bltz, bltza, bgezal, bgez, j, jal, beq, bne, ble
+		7'b1100111: Branch <= 1; //jr, jalr
+		7'b1100011: Branch <= 1; //bltz, bltza, beq, bne, ble
+		7'b1101111: Branch <= 1; //jal		
+		default: Branch <= 0;		
 	  endcase // unique case (op)
 
 	  // Link
 	  unique case (op)
-		6'b000000: Link <= Branch & funct[0]; // 0 jr, 1 jalr
-		6'b000001: Link <= rt[4]; // 0 bltz/bgez, 1 bltzal/bgezal
-		6'b000011: Link <= 1; //jal
+		7'b1100111: Link <= Branch; // 0 jr, 1 jalr
+		7'b1100011: Link <= (funct == 3'b110 | funct == 3'b111); // 0 bltz/bgez, 1 bltzal/bgezal
+		7'b1101111: Link <= 1; //jal
 		default: Link <= 0;
 	  endcase // unique case (op)
 
 	  // BranchCondition
-	  unique case(op[2:0])
-		3'b001: unique case (rt[0])
-						 0: BranchCondition <= RD1[N-1]; // bltz, bltzal
-						 1: BranchCondition <= ~RD1[N-1];
+	  unique case(op)
+		7'b1100011: unique case (funct)
+							 3'b100: BranchCondition <= RD1[N-1]; // bltz, bltzal
+							 3'b110: BranchCondition <= RD1[N-1];						
+							 3'b000: BranchCondition <= Zero; // beq
+							 3'b001: BranchCondition <= ~Zero; // bne
+							 1: BranchCondition <= ~RD1[N-1];
 					   endcase // case (rt[0])
-		3'b100: BranchCondition <= Zero; // beq
+/*		3'b100: BranchCondition <= Zero; // beq
 		3'b101: BranchCondition <= ~Zero; // bne
 		3'b110: BranchCondition <= Zero | RD1[N-1]; // blez
-		3'b111: BranchCondition <= ~Zero & ~RD1[N-1]; // bgtz
+		3'b111: BranchCondition <= ~Zero & ~RD1[N-1]; // bgtz*/
 		default: BranchCondition <= Branch; //jr,jalr, j, jal
 	  endcase // unique case (op[2:0])
 
 	  // ALUControl
 	  unique case (op)
-		6'b000000: unique case (funct)
-							6'b000000: ALUControl <= 4'b1001; // sll
-							6'b000010: ALUControl <= 4'b1010; // srl
-							6'b000011: ALUControl <= 4'b1011; // sra
-							6'b000100: ALUControl <= 4'b1001; // sllv
-							6'b000110: ALUControl <= 4'b1010; // srlv
-							6'b000111: ALUControl <= 4'b1011; // srav
-
-							6'b011000: ALUControl <= 4'b1100; //mult
-							6'b011001: ALUControl <= 4'b1101; //multu
-							6'b011010: ALUControl <= 4'b1110; //div
-							6'b011011: ALUControl <= 4'b1111; //divu
-
-							6'b100010: ALUControl <= 4'b0110; //sub
-							6'b100011: ALUControl <= 4'b0110; //subu
-							6'b100100: ALUControl <= 4'b0000; //and
-							6'b100101: ALUControl <= 4'b0001; //or
-							6'b100110: ALUControl <= 4'b0100; //xor
-							6'b100111: ALUControl <= 4'b0101; //nor
-							6'b101010: ALUControl <= 4'b0011; //slt
-							6'b101011: ALUControl <= 4'b0111; //sltu
-							default: ALUControl <= 4'b0010;
+		7'b0110011: unique case (funct2)
+							 7'b0000001: unique case (funct)
+												  3'b000: ALUControl <= 4'b1100; //mult
+												  3'b001: ALUControl <= 4'b1101; //multu
+												  3'b100: ALUControl <= 4'b1110; //div
+												  3'b101: ALUControl <= 4'b1111; //divu
+												endcase // case (funct)
+							 7'b0000000: unique case (funct)
+												  3'b001: ALUControl <= 4'b1001; // sll
+												  3'b101: ALUControl <= 4'b1010; // srl
+												  3'b111: ALUControl <= 4'b0000; // and
+												  3'b110: ALUControl <= 4'b0001; // or
+												  3'b100: ALUControl <= 4'b0100; // xor
+												  3'b010: ALUControl <= 4'b0011; // slt
+												  3'b011: ALUControl <= 4'b0111; // sltu
+												  default: ALUControl <= 4'b0010; 					  
+												endcase // case (funct)
+							 7'b0100000: unique case (funct)
+												  3'b000: ALUControl <= 4'b0110; //sub
+												  3'b101: ALUControl <= 4'b1011; // sra
+												  default: ALUControl <= 4'b0010;							
+												endcase
+							 default: ALUControl <= 4'b0010;
 						  endcase // case (funct)
-		6'b000100: ALUControl <= 4'b0110; //beq
-		6'b000101: ALUControl <= 4'b0110; //bne
-		6'b001010: ALUControl <= 4'b0011; //slti
-		6'b001011: ALUControl <= 4'b0111; //sltiu
-		6'b001100: ALUControl <= 4'b0000; //andi
-		6'b001101: ALUControl <= 4'b0001; //ori
-		6'b001110: ALUControl <= 4'b0100; //xori
-		6'b001111: ALUControl <= 4'b1000; //lui
+		7'b1100011: unique case (funct)
+							 3'b000: ALUControl <= 4'b0110; //beq
+							 3'b001: ALUControl <= 4'b0110; //bne
+							 default: ALUControl <= 4'b0010;
+						   endcase
+		7'b0010011: unique case (funct)
+							 3'b010: ALUControl <= 4'b0011; //slti
+							 3'b011: ALUControl <= 4'b0111; //sltiu
+							 3'b111: ALUControl <= 4'b0000; //andi
+							 3'b110: ALUControl <= 4'b0001; //ori
+							 3'b100: ALUControl <= 4'b0100; //xori
+							 default: ALUControl <= 4'b0010;
+						   endcase
+		7'b0110111: ALUControl <= 4'b1000; //lui
 		default: ALUControl <= 4'b0010;
 	  endcase // unique case (op)
    end // always_comb
